@@ -1,0 +1,75 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+    inputs:
+      ngrok_region:
+        description: 'Region (ap = Singapore)'
+        required: false
+        default: 'ap'
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    steps:
+      - name: Setup RDP
+        run: |
+          # ===== DOWNLOAD NGROK =====
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile ngrok.zip
+          Expand-Archive ngrok.zip -DestinationPath ngrok
+          .\ngrok\ngrok.exe authtoken 3CALF22QQXcRRx5hlCGVyW04O5S_2VerPxZYcFEnDCuiJjgwV
+          
+
+          # ===== ENABLE RDP =====
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          # ===== CREATE USER =====
+          $pass = ConvertTo-SecureString "Win2022-RDP!" -AsPlainText -Force
+          New-LocalUser "rdpuser" -Password $pass
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "rdpuser"
+          Add-LocalGroupMember -Group "Administrators" -Member "rdpuser"
+
+          # ===== TỐI ƯU HIỆU NĂNG =====
+          powercfg /setactive SCHEME_MIN
+
+          # Tắt animation + hiệu ứng
+          reg add "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_SZ /d 0 /f
+          reg add "HKCU\Control Panel\Desktop" /v FontSmoothing /t REG_SZ /d 0 /f
+          reg add "HKCU\Control Panel\Desktop" /v Wallpaper /t REG_SZ /d "" /f
+
+          # Tắt first login animation
+          reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v EnableFirstLogonAnimation /t REG_DWORD /d 0 /f
+
+          # ===== TẮT SERVICE NẶNG =====
+          Stop-Service -Name "SysMain" -Force
+          Stop-Service -Name "DiagTrack" -Force
+
+          # Defender nhẹ hơn
+          Set-MpPreference -DisableRealtimeMonitoring $true
+
+          # ===== TỐI ƯU RDP =====
+          reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fEnableVirtualizedGraphics /t REG_DWORD /d 1 /f
+          reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v AVCHardwareEncodePreferred /t REG_DWORD /d 1 /f
+          reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v MinFrameRate /t REG_DWORD /d 60 /f
+          reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fDisableWallpaper /t REG_DWORD /d 1 /f
+
+          # ===== START NGROK =====
+          Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389 --region=${{ github.event.inputs.ngrok_region }}" -NoNewWindow
+          Start-Sleep -Seconds 8
+
+          # ===== GET RDP INFO =====
+          $response = Invoke-WebRequest -Uri "http://127.0.0.1:4040/api/tunnels"
+          $tunnelUrl = ($response.Content | ConvertFrom-Json).tunnels[0].public_url -replace 'tcp://', ''
+
+          Write-Host "========================="
+          Write-Host "RDP READY"
+          Write-Host "IP: $tunnelUrl"
+          Write-Host "USER: rdpuser"
+          Write-Host "PASS: Win2022-RDP!"
+          Write-Host "========================="
+
+          # ===== GIỮ SESSION =====
+          Start-Sleep -Seconds 21600
